@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { createServer as createHttpServer } from 'node:http';
 import { createServer } from 'node:net';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
@@ -11,9 +12,19 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 test('production server serves the React build and completes the farmer journey over HTTP', async (t) => {
   const temp = await mkdtemp(path.join(os.tmpdir(), 'krushi-system-')); const port = await freePort();
-  const child = spawn(process.execPath, ['src/server.js'], { cwd: process.cwd(), env: { ...process.env, NODE_ENV: 'production', PORT: String(port), DATABASE_PATH: path.join(temp, 'db.sqlite'), UPLOAD_DIR: path.join(temp, 'uploads'), WEB_DIR: path.resolve('dist') }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const gemini = createHttpServer(async (req, res) => {
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    const request = JSON.parse(body);
+    assert.ok(request.contents[0].parts.some((part) => part.inline_data?.mime_type === 'image/png'));
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify({ probableIssue: 'System test found possible leaf spots', causes: 'Mock Gemini image finding for system test.', activeIngredients: 'No pesticide suggested by the test image.', organicAlternatives: 'Inspect affected leaves.', preventiveMeasures: 'Monitor the crop.', irrigationGuidance: 'Check soil moisture.', treatmentTiming: 'Consult an officer before treatment.' }) }] } }] }));
+  });
+  await new Promise((resolve) => gemini.listen(0, '127.0.0.1', resolve));
+  const geminiBaseUrl = `http://127.0.0.1:${gemini.address().port}/v1beta`;
+  const child = spawn(process.execPath, ['src/server.js'], { cwd: process.cwd(), env: { ...process.env, NODE_ENV: 'production', PORT: String(port), DATABASE_PATH: path.join(temp, 'db.sqlite'), UPLOAD_DIR: path.join(temp, 'uploads'), WEB_DIR: path.resolve('dist'), GEMINI_API_KEY: 'system-test-key', GEMINI_API_BASE_URL: geminiBaseUrl }, stdio: ['ignore', 'pipe', 'pipe'] });
   let log = ''; child.stdout.on('data', (d) => { log += d.toString(); }); child.stderr.on('data', (d) => { log += d.toString(); });
-  t.after(async () => { child.kill('SIGTERM'); await new Promise((r) => child.once('exit', r)); await rm(temp, { recursive: true, force: true }); });
+  t.after(async () => { child.kill('SIGTERM'); await new Promise((r) => child.once('exit', r)); await new Promise((resolve) => gemini.close(resolve)); await rm(temp, { recursive: true, force: true }); });
   let health;
   for (let i = 0; i < 60; i++) { try { health = await fetch(`http://127.0.0.1:${port}/api/status`); if (health.ok) break; } catch {} await sleep(100); }
   assert.ok(health?.ok, `server did not start: ${log}`);
@@ -25,7 +36,7 @@ test('production server serves the React build and completes the farmer journey 
   const form = new FormData(); form.set('crop', 'Paddy'); form.set('growthStage', 'Flowering'); form.set('district', 'Puri'); form.set('block', 'Pipili'); form.set('village', 'System village');
   form.set('image', new Blob([Buffer.from([137,80,78,71,13,10,26,10,0])], { type: 'image/png' }), 'leaf.png');
   const created = await fetch(`http://127.0.0.1:${port}/api/diagnoses`, { method: 'POST', headers: { cookie }, body: form });
-  const createdBody = await created.text(); assert.equal(created.status, 201, createdBody); const diagnosis = JSON.parse(createdBody); assert.equal(diagnosis.crop, 'Paddy');
+  const createdBody = await created.text(); assert.equal(created.status, 201, createdBody); const diagnosis = JSON.parse(createdBody); assert.equal(diagnosis.crop, 'Paddy'); assert.match(diagnosis.probableIssue, /System test found possible leaf spots/);
   const history = await fetch(`http://127.0.0.1:${port}/api/diagnoses`, { headers: { cookie } }); assert.equal((await history.json())[0].id, diagnosis.id);
   assert.equal((await fetch(`http://127.0.0.1:${port}/api/auth/logout`, { method: 'POST', headers: { cookie } })).status, 204);
   assert.equal((await fetch(`http://127.0.0.1:${port}/api/diagnoses`, { headers: { cookie } })).status, 401);

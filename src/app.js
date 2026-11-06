@@ -260,7 +260,7 @@ export function createApp({ databasePath = ':memory:', uploadDir = path.resolve(
       }
       let advisory;
       try {
-        advisory = await getGeminiAdvisory({ crop: req.body.crop.trim(), growthStage: stage, symptom, district, block, village, farmerContext: { farmSizeAcres: req.farmer.farm_size_acres, soilType: req.farmer.soil_type, irrigationSource: req.farmer.irrigation_source, farmingExperienceYears: req.farmer.farming_experience_years, soil: soilSummary(req.farmer, language) }, image: req.file.buffer, mimeType: req.file.mimetype, apiKey: env.GEMINI_API_KEY, model: env.GEMINI_MODEL || 'gemini-3.8-flash', language, fetchImpl });
+        advisory = await getGeminiAdvisory({ crop: req.body.crop.trim(), growthStage: stage, symptom, district, block, village, farmerContext: { farmSizeAcres: req.farmer.farm_size_acres, soilType: req.farmer.soil_type, irrigationSource: req.farmer.irrigation_source, farmingExperienceYears: req.farmer.farming_experience_years, soil: soilSummary(req.farmer, language) }, image: req.file.buffer, mimeType: req.file.mimetype, apiKey: env.GEMINI_API_KEY, model: env.GEMINI_MODEL || 'gemini-3.8-flash', language, fetchImpl, apiBaseUrl: env.GEMINI_API_BASE_URL });
       } catch (error) {
         console.warn(`[crop-analysis] Gemini analysis failed: ${error.message}`);
         return res.status(502).json({ code: 'GEMINI_ANALYSIS_FAILED', error: 'Gemini could not analyze this photo. Check the server API key, model, quota, and image, then try again.' });
@@ -294,7 +294,7 @@ export function createApp({ databasePath = ':memory:', uploadDir = path.resolve(
     if (row.language === language) return res.json(publicDiagnosis(row));
     if (!env.GEMINI_API_KEY) return res.status(503).json({ code: 'GEMINI_UNAVAILABLE', error: 'Live report translation needs Gemini configured on the backend.' });
     try {
-      const translated = await translateAssessmentText({ targetLanguage: language, apiKey: env.GEMINI_API_KEY, model: env.GEMINI_MODEL || 'gemini-3.8-flash', fetchImpl, fields: { probableIssue: row.probable_issue, causes: row.causes, activeIngredients: row.active_ingredients, organicAlternatives: row.organic_alternatives, prevention: row.prevention, irrigation: row.irrigation, timing: row.timing, weather: row.weather, soil: row.soil } });
+      const translated = await translateAssessmentText({ targetLanguage: language, apiKey: env.GEMINI_API_KEY, model: env.GEMINI_MODEL || 'gemini-3.8-flash', fetchImpl, apiBaseUrl: env.GEMINI_API_BASE_URL, fields: { probableIssue: row.probable_issue, causes: row.causes, activeIngredients: row.active_ingredients, organicAlternatives: row.organic_alternatives, prevention: row.prevention, irrigation: row.irrigation, timing: row.timing, weather: row.weather, soil: row.soil } });
       res.json({ ...publicDiagnosis(row), ...translated, language });
     } catch (error) {
       console.warn(`[assessment-translation] Gemini translation failed: ${error.message}`);

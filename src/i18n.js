@@ -62,7 +62,7 @@ Object.assign(translations.or, {
   reviewing: 'ଫସଲର ଫଟୋ ମୂଲ୍ୟାଙ୍କନ ପାଇଁ ପଠାଯାଉଛି…',
   probableNote: '',
   checking: 'ଫସଲର ଫଟୋ ଯାଞ୍ଚ ହେଉଛି…',
-  disclaimer: ''
+  disclaimer: 'ଏହି ଲକ୍ଷଣ ଆଧାରିତ ଗାଇଡ୍ ସମ୍ଭାବ୍ୟ କାରଣ କୁହେ, ନିଶ୍ଚିତ ରୋଗ ନିର୍ଣ୍ଣୟ ନୁହେଁ। ଚିକିତ୍ସା ପୂର୍ବରୁ ସ୍ଥାନୀୟ କୃଷି ବିଶେଷଜ୍ଞଙ୍କୁ ପଚାରନ୍ତୁ।'
 });
 
 Object.assign(translations.en, {

@@ -28,13 +28,13 @@ export function localAdvisory({ crop = '', growthStage = '', symptom = 'unsure',
 }
 
 /** Analyze the uploaded crop photo through Gemini's server-side REST API. */
-export async function getGeminiAdvisory({ crop, growthStage = '', symptom = 'unsure', district = '', block = '', village = '', farmerContext = {}, image, mimeType, apiKey, language = 'en', model = 'gemini-3.8-flash', fetchImpl = fetch, modelChain = null }) {
+export async function getGeminiAdvisory({ crop, growthStage = '', symptom = 'unsure', district = '', block = '', village = '', farmerContext = {}, image, mimeType, apiKey, language = 'en', model = 'gemini-3.8-flash', fetchImpl = fetch, apiBaseUrl = 'https://generativelanguage.googleapis.com/v1beta', modelChain = null }) {
   if (!apiKey) throw new Error('Gemini API key is not configured on the server.');
   if (!Buffer.isBuffer(image) || !image.length) throw new Error('A crop image is required.');
   if (!['image/jpeg', 'image/png', 'image/webp'].includes(mimeType)) throw new Error('Unsupported crop image type.');
   const farmDetails = [farmerContext.farmSizeAcres != null ? `farm size ${farmerContext.farmSizeAcres} acres` : '', farmerContext.soilType ? `soil type ${farmerContext.soilType}` : '', farmerContext.irrigationSource ? `irrigation ${farmerContext.irrigationSource}` : '', farmerContext.farmingExperienceYears != null ? `${farmerContext.farmingExperienceYears} years farming experience` : '', farmerContext.soil ? `soil test context: ${farmerContext.soil}` : ''].filter(Boolean).join('; ') || 'not provided';
   const prompt = `You are a careful crop-health assistant helping a farmer in Odisha, India. The attached image is the primary evidence: inspect its visible details before using the context. Crop=${crop}; growth stage=${growthStage || 'not provided'}; farmer-selected symptom=${symptom}; location=${[village, block, district].filter(Boolean).join(', ') || 'not provided'}; farmer-reported farm details=${farmDetails}. Use soil, irrigation, and farm size details to tailor practical non-chemical, irrigation, and prevention guidance where relevant. Treat these details as farmer-reported context, not verified measurements; never infer a diagnosis from them or let them override the photo. Return only valid JSON with string fields probableIssue, causes, activeIngredients, organicAlternatives, preventiveMeasures, irrigationGuidance, treatmentTiming. Write in ${language === 'or' ? 'Odia' : 'English'}. For probableIssue, give a crop-specific likely finding supported by the photo, state the visible evidence, and include a qualitative confidence (low, moderate, or high); do not invent a numeric accuracy score. If the image is unclear, the crop cannot be identified, or evidence is insufficient, state that plainly instead of guessing. Distinguish a possible issue from a confirmed diagnosis. For activeIngredients, base any candidate strictly on the same image-based finding and this crop: name a relevant active ingredient, pesticide type, target pest/disease, and why it fits only when the visual evidence supports it. Label it a candidate for local KVK/agriculture officer confirmation, never a prescription. If evidence is insufficient, explicitly say no pesticide can be safely suggested from this photo. Do not give brand names, dosage, dilution, or spray frequency. Do not claim a product is registered; instruct the farmer to verify the current product label for this exact crop and target and confirm with an officer before use. Prefer non-chemical measures where suitable.`;
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+  const url = `${apiBaseUrl.replace(/\/$/, '')}/models/${encodeURIComponent(model)}:generateContent`;
   const requestBody = JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }, { inline_data: { mime_type: mimeType, data: image.toString('base64') } }] }], generationConfig: { responseMimeType: 'application/json', temperature: 0.2 } });
   const makeOptions = () => ({
     method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
@@ -58,7 +58,7 @@ export async function getGeminiAdvisory({ crop, growthStage = '', symptom = 'uns
     const modelIndex = fallbackChain.indexOf(model);
     if ([404, 429, 503].includes(response.status) && modelIndex >= 0 && modelIndex < fallbackChain.length - 1) {
       const fallbackModel = fallbackChain[modelIndex + 1];
-      const fallback = await getGeminiAdvisory({ crop, growthStage, symptom, district, block, village, farmerContext, image, mimeType, apiKey, language, model: fallbackModel, fetchImpl, modelChain: fallbackChain });
+      const fallback = await getGeminiAdvisory({ crop, growthStage, symptom, district, block, village, farmerContext, image, mimeType, apiKey, language, model: fallbackModel, fetchImpl, apiBaseUrl, modelChain: fallbackChain });
       fallback.provider = `Gemini image analysis (${fallbackModel} fallback)`;
       return fallback;
     }
@@ -82,7 +82,7 @@ export async function getGeminiAdvisory({ crop, growthStage = '', symptom = 'uns
   return result;
 }
 
-export async function translateAssessmentText({ fields, targetLanguage, apiKey, model = 'gemini-3.8-flash', fetchImpl = fetch }) {
+export async function translateAssessmentText({ fields, targetLanguage, apiKey, model = 'gemini-3.8-flash', fetchImpl = fetch, apiBaseUrl = 'https://generativelanguage.googleapis.com/v1beta' }) {
   if (!apiKey) throw new Error('Gemini API key is not configured on the server.');
   if (!['en', 'or'].includes(targetLanguage)) throw new Error('Unsupported assessment language.');
   const keys = ['probableIssue', 'causes', 'activeIngredients', 'organicAlternatives', 'prevention', 'irrigation', 'timing', 'weather', 'soil'];
@@ -92,7 +92,7 @@ export async function translateAssessmentText({ fields, targetLanguage, apiKey, 
   const models = [...new Set([model, 'gemini-3.1-flash-lite', 'gemini-3.5-flash-lite'])];
   let lastError;
   for (const candidate of models) {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(candidate)}:generateContent`;
+    const url = `${apiBaseUrl.replace(/\/$/, '')}/models/${encodeURIComponent(candidate)}:generateContent`;
     let response;
     try {
       response = await fetchImpl(url, { method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey }, body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: { responseMimeType: 'application/json', temperature: 0.1 } }), signal: AbortSignal.timeout(30_000) });

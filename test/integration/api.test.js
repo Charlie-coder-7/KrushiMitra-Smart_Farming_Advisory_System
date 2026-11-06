@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createApp } from '../../src/app.js';
 
-let server; let base; let db; let temp; const testEnv = { NODE_ENV: 'test' };
+let server; let base; let db; let temp; const testEnv = { NODE_ENV: 'test', GEMINI_API_KEY: 'private-test-key' };
 before(async () => {
   temp = await mkdtemp(path.join(os.tmpdir(), 'krushi-integration-'));
   const created = createApp({ databasePath: ':memory:', uploadDir: path.join(temp, 'uploads'), env: testEnv, fetchImpl: async (url, options) => {
@@ -52,7 +52,7 @@ test('registration, profile, diagnosis, history, and logout work together', asyn
   form.set('image', new Blob([Buffer.from([137,80,78,71,13,10,26,10,0])], { type: 'image/png' }), 'leaf.png');
   const diagnosis = await request('/api/diagnoses', { method: 'POST', body: form }, account.cookie);
   assert.equal(diagnosis.response.status, 201, JSON.stringify(diagnosis.data)); assert.equal(diagnosis.data.crop, 'Paddy');
-  assert.match(diagnosis.data.probableIssue, /ପତ୍ର ହଳଦିଆ/); assert.match(diagnosis.data.provider, /ସ୍ଥାନୀୟ ଲକ୍ଷଣ ଗାଇଡ୍/); assert.match(diagnosis.data.soil, /ମାଟି/); assert.match(diagnosis.data.weather, /ଆର୍ଦ୍ରତା/);
+  assert.match(diagnosis.data.probableIssue, /Gemini sees possible brown leaf spots/); assert.match(diagnosis.data.provider, /Gemini image analysis/); assert.match(diagnosis.data.soil, /ମାଟି/); assert.match(diagnosis.data.weather, /ଆର୍ଦ୍ରତା/);
   const history = await request('/api/diagnoses', {}, account.cookie); assert.equal(history.response.status, 200); assert.equal(history.data.length, 1); assert.equal(history.data[0].id, diagnosis.data.id);
   const changedPlaceForm = new FormData(); changedPlaceForm.set('crop', 'Paddy'); changedPlaceForm.set('district', 'Puri'); changedPlaceForm.set('block', 'Pipili'); changedPlaceForm.set('village', 'Different village');
   changedPlaceForm.set('image', new Blob([Buffer.from([137,80,78,71,13,10,26,10,0])], { type: 'image/png' }), 'leaf.png');
@@ -77,14 +77,21 @@ test('duplicate registration and invalid login return useful errors', async () =
   assert.equal(badLogin.response.status, 401);
 });
 
-test('status reports local fallback when Gemini key is not configured', async () => {
-  const status = await request('/api/status');
-  assert.equal(status.response.status, 200);
-  assert.deepEqual(status.data.integrations.cropAnalysis, { provider: 'Local symptom guide', configured: false, model: 'Rule-based advisory' });
-  assert.equal(JSON.stringify(status.data).includes('private-test-key'), false);
+test('status reports Gemini setup required when no key is configured', async () => {
+  const configuredKey = testEnv.GEMINI_API_KEY;
+  delete testEnv.GEMINI_API_KEY;
+  try {
+    const status = await request('/api/status');
+    assert.equal(status.response.status, 200);
+    assert.deepEqual(status.data.integrations.cropAnalysis, { provider: 'Gemini setup required', configured: false, model: 'Not configured' });
+    assert.equal(JSON.stringify(status.data).includes('private-test-key'), false);
+  } finally {
+    testEnv.GEMINI_API_KEY = configuredKey;
+  }
 });
 
 test('photo crop report sends the image to Gemini and saves its analysis', async () => {
+  const configuredKey = testEnv.GEMINI_API_KEY;
   testEnv.GEMINI_API_KEY = 'private-test-key';
   try {
     const status = await request('/api/status');
@@ -100,7 +107,7 @@ test('photo crop report sends the image to Gemini and saves its analysis', async
     assert.equal(history.data.length, 1);
     assert.match(history.data[0].provider, /Gemini image analysis/);
   } finally {
-    delete testEnv.GEMINI_API_KEY;
+    testEnv.GEMINI_API_KEY = configuredKey;
   }
 });
 
