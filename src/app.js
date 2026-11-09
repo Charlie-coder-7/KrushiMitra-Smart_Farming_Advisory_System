@@ -4,7 +4,8 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdir, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { randomUUID, randomBytes } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import {
   hashPassword,
@@ -40,6 +41,8 @@ function initializeDatabase(db) {
       name TEXT NOT NULL,
       email TEXT NOT NULL UNIQUE COLLATE NOCASE,
       password_hash TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'farmer',
+      is_active INTEGER NOT NULL DEFAULT 1,
       phone TEXT,
       district TEXT,
       block TEXT,
@@ -63,6 +66,21 @@ function initializeDatabase(db) {
       farmer_id INTEGER NOT NULL REFERENCES farmers(id) ON DELETE CASCADE,
       expires_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS auth_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      farmer_id INTEGER,
+      email TEXT NOT NULL,
+      event TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS password_reset_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email TEXT NOT NULL COLLATE NOCASE,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      resolved_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS auth_events_created ON auth_events(created_at DESC);
     CREATE TABLE IF NOT EXISTS diagnoses (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       farmer_id INTEGER NOT NULL REFERENCES farmers(id) ON DELETE CASCADE,
@@ -90,6 +108,8 @@ function initializeDatabase(db) {
     CREATE INDEX IF NOT EXISTS diagnoses_farmer_created ON diagnoses(farmer_id, created_at DESC);
   `);
   for (const [table, column, type] of [
+    ["farmers", "role", "TEXT NOT NULL DEFAULT 'farmer'"],
+    ["farmers", "is_active", "INTEGER NOT NULL DEFAULT 1"],
     ["farmers", "latitude", "REAL"],
     ["farmers", "longitude", "REAL"],
     ["farmers", "soil_ph", "REAL"],
@@ -144,6 +164,7 @@ function publicFarmer(farmer) {
     irrigationSource: farmer.irrigation_source,
     farmingExperienceYears: farmer.farming_experience_years,
     language: farmer.language,
+    role: farmer.role || "farmer",
   };
 }
 
@@ -219,8 +240,12 @@ export function createApp({
   app.use(express.json({ limit: "32kb" }));
   app.get("/api/status", (_req, res) => {
     const configured = Boolean(env.GEMINI_API_KEY);
+    const hasAdmin = db.prepare("SELECT COUNT(*) AS count FROM farmers WHERE role='admin'").get().count > 0;
+    const adminContactEmail = db.prepare("SELECT email FROM farmers WHERE role='admin' AND is_active=1 ORDER BY id LIMIT 1").get()?.email || env.ADMIN_EMAIL || "";
     res.json({
       status: "ok",
+      adminSetupAvailable: Boolean(env.ADMIN_SETUP_KEY && env.ADMIN_SETUP_KEY.length >= 20 && !hasAdmin),
+      adminContactEmail,
       integrations: {
         cropAnalysis: {
           provider: configured
@@ -243,7 +268,7 @@ export function createApp({
     if (!token) return null;
     const row = db
       .prepare(
-        "SELECT farmers.* FROM sessions JOIN farmers ON farmers.id=sessions.farmer_id WHERE token_hash=? AND expires_at>?",
+        "SELECT farmers.* FROM sessions JOIN farmers ON farmers.id=sessions.farmer_id WHERE token_hash=? AND expires_at>? AND farmers.is_active=1",
       )
       .get(tokenDigest(token), Date.now());
     return row || null;
@@ -272,6 +297,17 @@ export function createApp({
     next();
   }
 
+  function requireAdmin(req, res, next) {
+    if (req.farmer.role !== "admin")
+      return res.status(403).json({ error: "Administrator access required." });
+    next();
+  }
+
+  function recordAuthEvent(farmerId, email, event) {
+    db.prepare("INSERT INTO auth_events(farmer_id,email,event) VALUES(?,?,?)")
+      .run(farmerId ?? null, String(email || "unknown").slice(0, 200), event);
+  }
+
   function startSession(farmerId, res) {
     const token = newSessionToken();
     db.prepare(
@@ -279,6 +315,41 @@ export function createApp({
     ).run(tokenDigest(token), farmerId, Date.now() + 7 * 24 * 60 * 60 * 1000);
     setSessionCookie(res, token, env.COOKIE_SECURE === "true");
   }
+
+  app.post("/api/admin/setup", (req, res) => {
+    const { name, email, password, setupKey } = req.body || {};
+    if (!env.ADMIN_SETUP_KEY || env.ADMIN_SETUP_KEY.length < 20)
+      return res.status(503).json({ error: "Administrator setup is not enabled on this server." });
+    const suppliedKey = typeof setupKey === "string" ? setupKey : "";
+    const expectedDigest = createHash("sha256").update(env.ADMIN_SETUP_KEY).digest();
+    const suppliedDigest = createHash("sha256").update(suppliedKey).digest();
+    if (!timingSafeEqual(expectedDigest, suppliedDigest))
+      return res.status(403).json({ error: "The administrator setup key is incorrect." });
+    if (typeof name !== "string" || !name.trim() || name.trim().length > 100)
+      return res.status(400).json({ error: "Enter your name (up to 100 characters)." });
+    if (typeof email !== "string" || !emailPattern.test(email.trim()) || email.length > 200)
+      return res.status(400).json({ error: "Enter a valid email address." });
+    if (typeof password !== "string" || password.length < 8 || password.length > 100)
+      return res.status(400).json({ error: "Choose a password between 8 and 100 characters." });
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      if (db.prepare("SELECT 1 FROM farmers WHERE role='admin' LIMIT 1").get()) {
+        db.exec("ROLLBACK");
+        return res.status(409).json({ error: "Administrator setup has already been completed." });
+      }
+      const result = db.prepare("INSERT INTO farmers(name,email,password_hash,role,language) VALUES(?,?,?,'admin',?)")
+        .run(name.trim(), email.trim().toLowerCase(), hashPassword(password), ["en", "or"].includes(req.body.language) ? req.body.language : "en");
+      const farmer = db.prepare("SELECT * FROM farmers WHERE id=?").get(Number(result.lastInsertRowid));
+      db.prepare("INSERT INTO auth_events(farmer_id,email,event) VALUES(?,?,?)").run(farmer.id, farmer.email, "admin_created");
+      db.exec("COMMIT");
+      startSession(farmer.id, res);
+      res.status(201).json(publicFarmer(farmer));
+    } catch (error) {
+      db.exec("ROLLBACK");
+      if (String(error.message).includes("UNIQUE")) return res.status(409).json({ error: "An account with this email already exists." });
+      throw error;
+    }
+  });
 
   app.post("/api/auth/register", (req, res) => {
     const { name, email, password } = req.body || {};
@@ -317,6 +388,7 @@ export function createApp({
       const farmer = db
         .prepare("SELECT * FROM farmers WHERE id=?")
         .get(Number(result.lastInsertRowid));
+      recordAuthEvent(farmer.id, farmer.email, "account_created");
       startSession(farmer.id, res);
       res.status(201).json(publicFarmer(farmer));
     } catch (error) {
@@ -335,8 +407,16 @@ export function createApp({
     const farmer = db
       .prepare("SELECT * FROM farmers WHERE email=?")
       .get(email.trim());
-    if (!farmer || !verifyPassword(password, farmer.password_hash))
+    if (!farmer || !verifyPassword(password, farmer.password_hash)) {
+      recordAuthEvent(farmer?.id, email.trim().toLowerCase(), "login_failed");
       return res.status(401).json({ error: "Email or password is incorrect." });
+    }
+    if (farmer.role === "admin")
+      return res.status(403).json({ error: "Use the administrator sign-in page." });
+    if (!farmer.is_active) {
+      recordAuthEvent(farmer.id, farmer.email, "login_blocked");
+      return res.status(403).json({ error: "This account is disabled. Contact the administrator." });
+    }
     const old =
       req.cookies?.km_session || parseCookie(req.headers.cookie, "km_session");
     if (old)
@@ -344,6 +424,41 @@ export function createApp({
         tokenDigest(old),
       );
     startSession(farmer.id, res);
+    recordAuthEvent(farmer.id, farmer.email, "login_success");
+    res.json(publicFarmer(farmer));
+  });
+
+  app.post("/api/auth/password-reset-request", (req, res) => {
+    const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
+    if (!emailPattern.test(email) || email.length > 200)
+      return res.status(400).json({ error: "Enter a valid email address." });
+    const farmer = db.prepare("SELECT id FROM farmers WHERE email=? AND role='farmer'").get(email);
+    if (farmer) {
+      const pending = db.prepare("SELECT id FROM password_reset_requests WHERE email=? AND status='pending' LIMIT 1").get(email);
+      if (!pending) db.prepare("INSERT INTO password_reset_requests(email) VALUES(?)").run(email);
+      recordAuthEvent(farmer.id, email, "password_reset_requested");
+    }
+    // Keep the response identical for existing and unknown addresses.
+    res.json({ message: "If the account exists, a reset request has been sent to the administrator." });
+  });
+
+  app.post("/api/admin/login", (req, res) => {
+    const { email, password } = req.body || {};
+    if (typeof email !== "string" || typeof password !== "string")
+      return res.status(400).json({ error: "Enter your administrator email and password." });
+    const farmer = db.prepare("SELECT * FROM farmers WHERE email=?").get(email.trim());
+    if (!farmer || !verifyPassword(password, farmer.password_hash) || farmer.role !== "admin") {
+      recordAuthEvent(farmer?.id, email.trim().toLowerCase(), "admin_login_failed");
+      return res.status(401).json({ error: "Administrator email or password is incorrect." });
+    }
+    if (!farmer.is_active) {
+      recordAuthEvent(farmer.id, farmer.email, "admin_login_blocked");
+      return res.status(403).json({ error: "This administrator account is disabled." });
+    }
+    const old = req.cookies?.km_session || parseCookie(req.headers.cookie, "km_session");
+    if (old) db.prepare("DELETE FROM sessions WHERE token_hash=?").run(tokenDigest(old));
+    startSession(farmer.id, res);
+    recordAuthEvent(farmer.id, farmer.email, "admin_login_success");
     res.json(publicFarmer(farmer));
   });
 
@@ -353,6 +468,7 @@ export function createApp({
     db.prepare("DELETE FROM sessions WHERE token_hash=?").run(
       tokenDigest(token),
     );
+    recordAuthEvent(req.farmer.id, req.farmer.email, "logout");
     res.clearCookie("km_session", {
       httpOnly: true,
       sameSite: "lax",
@@ -360,6 +476,119 @@ export function createApp({
       path: "/",
     });
     res.status(204).end();
+  });
+
+  app.get("/api/admin/overview", requireFarmer, requireAdmin, (req, res) => {
+    const today = new Date().toISOString().slice(0, 10);
+    const defaultFrom = new Date(Date.now() - 29 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const from = typeof req.query.from === "string" ? req.query.from : defaultFrom;
+    const to = typeof req.query.to === "string" ? req.query.to : today;
+    const validDate = (value) => /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
+    if (!validDate(from) || !validDate(to) || from > to)
+      return res.status(400).json({ error: "Choose a valid date range." });
+    const dayCount = Math.floor((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000) + 1;
+    if (dayCount > 366)
+      return res.status(400).json({ error: "Activity ranges can include up to 366 days." });
+    const farmers = db.prepare(`
+      SELECT f.id,f.name,f.email,f.role,f.is_active,f.created_at,
+        (SELECT MAX(created_at) FROM auth_events e WHERE e.farmer_id=f.id AND e.event IN ('login_success','admin_login_success')) AS last_login,
+        (SELECT COUNT(*) FROM sessions s WHERE s.farmer_id=f.id AND s.expires_at>?) AS active_sessions,
+        (SELECT COUNT(*) FROM diagnoses d WHERE d.farmer_id=f.id) AS assessment_count
+      FROM farmers f ORDER BY f.created_at DESC
+    `).all(Date.now());
+    const events = db.prepare("SELECT id,farmer_id,email,event,created_at FROM auth_events ORDER BY id DESC LIMIT 100").all();
+    const activeSessions = db.prepare(`
+      SELECT s.farmer_id,f.name,f.email,s.expires_at FROM sessions s
+      JOIN farmers f ON f.id=s.farmer_id WHERE s.expires_at>? AND f.is_active=1 ORDER BY s.expires_at DESC
+    `).all(Date.now());
+    const passwordResetRequests = db.prepare("SELECT id,email,status,created_at,resolved_at FROM password_reset_requests ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END, id DESC LIMIT 100").all();
+    const activity = db.prepare(`
+      WITH RECURSIVE days(day) AS (
+        SELECT ? UNION ALL SELECT date(day, '+1 day') FROM days WHERE day < ?
+      )
+      SELECT days.day AS date,
+        (SELECT COUNT(*) FROM farmers f WHERE date(f.created_at)=days.day) AS accounts,
+        (SELECT COUNT(*) FROM auth_events e WHERE date(e.created_at)=days.day AND e.event IN ('login_success','admin_login_success')) AS logins,
+        (SELECT COUNT(*) FROM diagnoses d WHERE date(d.created_at)=days.day) AS assessments
+      FROM days ORDER BY days.day
+    `).all(from, to);
+    const dbReady = db.prepare("SELECT 1 AS ready").get()?.ready === 1;
+    res.json({
+      farmers,
+      events,
+      activeSessions,
+      passwordResetRequests,
+      range: { from, to },
+      activity,
+      health: {
+        api: "healthy",
+        database: dbReady ? "connected" : "unavailable",
+        cropAnalysis: env.GEMINI_API_KEY ? "configured · not live-tested" : "not configured",
+        weather: env.WEATHER_API_KEY ? "Open-Meteo available · WeatherAPI configured · not live-tested" : "Open-Meteo available · WeatherAPI not configured",
+        storage: "private local filesystem",
+        uptimeSeconds: Math.floor(process.uptime()),
+      },
+    });
+  });
+
+  app.post("/api/admin/password-reset-requests/:id/resolve", requireFarmer, requireAdmin, (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isSafeInteger(id) || id < 1)
+      return res.status(400).json({ error: "Invalid reset request." });
+    const reset = db.prepare("SELECT * FROM password_reset_requests WHERE id=? AND status='pending'").get(id);
+    if (!reset) return res.status(404).json({ error: "This reset request is no longer pending." });
+    const farmer = db.prepare("SELECT id FROM farmers WHERE email=? AND role='farmer'").get(reset.email);
+    if (!farmer) return res.status(404).json({ error: "Farmer account not found." });
+    const password = randomBytes(12).toString("base64url");
+    db.prepare("UPDATE farmers SET password_hash=? WHERE id=?").run(hashPassword(password), farmer.id);
+    db.prepare("DELETE FROM sessions WHERE farmer_id=?").run(farmer.id);
+    db.prepare("UPDATE password_reset_requests SET status='resolved',resolved_at=CURRENT_TIMESTAMP WHERE id=?").run(id);
+    recordAuthEvent(req.farmer.id, req.farmer.email, `password_reset_resolved:${farmer.id}`);
+    res.json({ ok: true, temporaryPassword: password });
+  });
+
+  app.post("/api/admin/password-reset-requests/:id/reject", requireFarmer, requireAdmin, (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isSafeInteger(id) || id < 1)
+      return res.status(400).json({ error: "Invalid reset request." });
+    const result = db.prepare("UPDATE password_reset_requests SET status='rejected',resolved_at=CURRENT_TIMESTAMP WHERE id=? AND status='pending'").run(id);
+    if (!result.changes)
+      return res.status(404).json({ error: "This reset request is no longer pending." });
+    recordAuthEvent(req.farmer.id, req.farmer.email, `password_reset_rejected:${id}`);
+    res.json({ ok: true });
+  });
+
+  app.patch("/api/admin/farmers/:id", requireFarmer, requireAdmin, (req, res) => {
+    const id = Number(req.params.id);
+    const active = req.body?.active;
+    const role = req.body?.role;
+    if (!Number.isSafeInteger(id) || id < 1 || (active === undefined && role === undefined) || (active !== undefined && typeof active !== "boolean") || (role !== undefined && !["farmer", "admin"].includes(role)))
+      return res.status(400).json({ error: "Choose a valid account role or status." });
+    const target = db.prepare("SELECT id,role FROM farmers WHERE id=?").get(id);
+    if (!target) return res.status(404).json({ error: "Account not found." });
+    const nextRole = role ?? target.role;
+    const nextActive = active ?? Boolean(db.prepare("SELECT is_active FROM farmers WHERE id=?").get(id).is_active);
+    if (id === req.farmer.id && (!nextActive || nextRole !== "admin"))
+      return res.status(400).json({ error: "You cannot disable or demote your own administrator account." });
+    const remainsAdmin = nextRole === "admin" && nextActive;
+    const removesActiveAdmin = target.role === "admin" && Boolean(db.prepare("SELECT is_active FROM farmers WHERE id=?").get(id).is_active) && !remainsAdmin;
+    if (removesActiveAdmin && db.prepare("SELECT COUNT(*) AS count FROM farmers WHERE role='admin' AND is_active=1").get().count < 2)
+      return res.status(400).json({ error: "Keep at least one active administrator." });
+    db.prepare("UPDATE farmers SET role=?,is_active=? WHERE id=?").run(nextRole, nextActive ? 1 : 0, id);
+    if (!nextActive) db.prepare("DELETE FROM sessions WHERE farmer_id=?").run(id);
+    if (role !== undefined && role !== target.role) recordAuthEvent(req.farmer.id, req.farmer.email, `role_changed:${id}:${nextRole}`);
+    if (active !== undefined) recordAuthEvent(req.farmer.id, req.farmer.email, active ? `account_enabled:${id}` : `account_disabled:${id}`);
+    res.json({ ok: true, role: nextRole, active: nextActive });
+  });
+
+  app.post("/api/admin/farmers/:id/revoke-sessions", requireFarmer, requireAdmin, (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isSafeInteger(id) || id < 1) return res.status(400).json({ error: "Choose a valid account." });
+    const target = db.prepare("SELECT id,email FROM farmers WHERE id=?").get(id);
+    if (!target) return res.status(404).json({ error: "Account not found." });
+    const result = db.prepare("DELETE FROM sessions WHERE farmer_id=?").run(id);
+    recordAuthEvent(req.farmer.id, req.farmer.email, `sessions_revoked:${id}`);
+    res.json({ ok: true, revoked: Number(result.changes) });
   });
 
   app.get("/api/auth/me", requireFarmer, (req, res) =>

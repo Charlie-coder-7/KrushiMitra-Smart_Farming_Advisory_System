@@ -779,3 +779,29 @@ Object.assign(translations.en, { greetingNight: "Good night," });
 Object.assign(translations.or, { greetingNight: "ଶୁଭ ରାତ୍ରି," });
 Object.assign(translations.en, { indiaTime: "India time (IST)" });
 Object.assign(translations.or, { indiaTime: "ଭାରତୀୟ ସମୟ (IST)" });
+Object.assign(translations.en, {
+  adminNav: "Admin panel", adminTitle: "Administrator panel", adminIntro: "Manage access, inspect sign-ins, and review account activity.",
+  adminHealth: "System health", adminHealthNote: "Server status and service setup. External providers are not live-tested here.",
+  adminActivity: "Activity overview", adminActivityNote: "Daily accounts, successful sign-ins, and crop assessments.",
+  adminAccounts: "Farmer accounts", adminResetRequests: "Password reset requests", adminAudit: "Authentication and admin audit history", adminSessions: "Currently active sessions",
+  adminFrom: "From", adminTo: "To", adminApplyDates: "Apply dates", adminRefresh: "Refresh", adminSearch: "Search by name, email, or event",
+  adminApproveReset: "Approve & create password", adminReject: "Reject", adminResetVerify: "Verify the farmer before approval. The generated password appears here once.",
+  adminCopyPassword: "Copy password", adminDraftReply: "Draft Gmail reply", adminResetClosed: "Closed", adminResetPending: "pending", adminResetResolved: "resolved", adminResetRejected: "rejected",
+  adminApplicationApi: "Application API", adminDatabase: "Database", adminCropAnalysis: "Crop analysis", adminWeather: "Weather", adminImageStorage: "Image storage", adminUptime: "Server uptime",
+  authAdmin: "Administrator sign in", authFarmer: "Farmer sign in", authSetup: "Set up admin", authCreateAdmin: "Create administrator account", authAdminIntro: "Sign in with the administrator account created during setup.", authSetupIntro: "One-time setup for the first administrator on this server.",
+  authForgotTitle: "Request password reset", authForgotIntro: "Send a request to the administrator. They can verify your identity and issue a temporary password.", authForgotButton: "Continue to Gmail", authBack: "Back to farmer sign in", authDraftTo: "Your Gmail draft will be addressed to:",
+  authBrandCaption: "FARMER ADVISORY", authAdminSetupKey: "Administrator setup key", authFeatureCrop: "Crop assessments", authFeatureWeather: "Local weather", authFeatureRecords: "Farm records", authGmailNotice: "Gmail opened with your reset request. Review it and press Send to contact the administrator.",
+});
+Object.assign(translations.or, {
+  adminNav: "ପ୍ରଶାସକ ପ୍ୟାନେଲ୍", adminTitle: "ପ୍ରଶାସକ ପ୍ୟାନେଲ୍", adminIntro: "ପ୍ରବେଶ ନିୟନ୍ତ୍ରଣ କରନ୍ତୁ, ସାଇନ୍-ଇନ୍ ଓ ଖାତା କାର୍ଯ୍ୟକଳାପ ଦେଖନ୍ତୁ।",
+  adminHealth: "ସିଷ୍ଟମ୍ ସ୍ଥିତି", adminHealthNote: "ସର୍ଭର୍ ସ୍ଥିତି ଓ ସେବା ସେଟଅପ୍। ବାହ୍ୟ ସେବାଗୁଡ଼ିକୁ ଏଠାରେ ସଜୀବ ଯାଞ୍ଚ କରାଯାଏନାହିଁ।",
+  adminActivity: "କାର୍ଯ୍ୟକଳାପ ସାରାଂଶ", adminActivityNote: "ଦୈନିକ ଖାତା, ସଫଳ ସାଇନ୍-ଇନ୍ ଓ ଫସଲ ମୂଲ୍ୟାଙ୍କନ।",
+  adminAccounts: "ଚାଷୀ ଖାତା", adminResetRequests: "ପାସୱାର୍ଡ ପୁନଃସେଟ୍ ଅନୁରୋଧ", adminAudit: "ସାଇନ୍-ଇନ୍ ଓ ପ୍ରଶାସକ ଇତିହାସ", adminSessions: "ବର୍ତ୍ତମାନ ସକ୍ରିୟ ସେସନ୍",
+  adminFrom: "ଠାରୁ", adminTo: "ପର୍ଯ୍ୟନ୍ତ", adminApplyDates: "ତାରିଖ ଲାଗୁ କରନ୍ତୁ", adminRefresh: "ସତେଜ କରନ୍ତୁ", adminSearch: "ନାମ, ଇମେଲ୍ କିମ୍ବା ଘଟଣା ଖୋଜନ୍ତୁ",
+  adminApproveReset: "ଅନୁମୋଦନ କରି ପାସୱାର୍ଡ ତିଆରି", adminReject: "ଅଗ୍ରାହ୍ୟ କରନ୍ତୁ", adminResetVerify: "ଅନୁମୋଦନ ପୂର୍ବରୁ ଚାଷୀଙ୍କ ପରିଚୟ ଯାଞ୍ଚ କରନ୍ତୁ। ତିଆରି ପାସୱାର୍ଡ ଏଠାରେ ଥରେ ଦେଖାଯିବ।",
+  adminCopyPassword: "ପାସୱାର୍ଡ କପି କରନ୍ତୁ", adminDraftReply: "Gmail ଉତ୍ତର ତିଆରି", adminResetClosed: "ବନ୍ଦ", adminResetPending: "ଅପେକ୍ଷାରତ", adminResetResolved: "ସମାଧାନ", adminResetRejected: "ଅଗ୍ରାହ୍ୟ",
+  adminApplicationApi: "ଆପ୍ଲିକେସନ୍ API", adminDatabase: "ଡାଟାବେସ୍", adminCropAnalysis: "ଫସଲ ବିଶ୍ଳେଷଣ", adminWeather: "ପାଣିପାଗ", adminImageStorage: "ଛବି ସଂରକ୍ଷଣ", adminUptime: "ସର୍ଭର୍ ଚାଲୁ ସମୟ",
+  authAdmin: "ପ୍ରଶାସକ ସାଇନ୍-ଇନ୍", authFarmer: "ଚାଷୀ ସାଇନ୍-ଇନ୍", authSetup: "ପ୍ରଶାସକ ସେଟଅପ୍", authCreateAdmin: "ପ୍ରଶାସକ ଖାତା ତିଆରି", authAdminIntro: "ସେଟଅପ୍ ସମୟରେ ତିଆରି ପ୍ରଶାସକ ଖାତାରେ ସାଇନ୍-ଇନ୍ କରନ୍ତୁ।", authSetupIntro: "ଏହି ସର୍ଭର୍ ପାଇଁ ପ୍ରଥମ ପ୍ରଶାସକଙ୍କ ଏକକାଳୀନ ସେଟଅପ୍।",
+  authForgotTitle: "ପାସୱାର୍ଡ ପୁନଃସେଟ୍ ଅନୁରୋଧ", authForgotIntro: "ପ୍ରଶାସକଙ୍କୁ ଅନୁରୋଧ ପଠାନ୍ତୁ। ସେ ଆପଣଙ୍କ ପରିଚୟ ଯାଞ୍ଚ କରି ଅସ୍ଥାୟୀ ପାସୱାର୍ଡ ଦେବେ।", authForgotButton: "Gmail ଖୋଲନ୍ତୁ", authBack: "ଚାଷୀ ସାଇନ୍-ଇନ୍ କୁ ଫେରନ୍ତୁ", authDraftTo: "ଆପଣଙ୍କ Gmail ଖସଡ଼ା ଏହି ଠିକଣାକୁ ଯିବ:",
+  authBrandCaption: "ଚାଷୀ ପରାମର୍ଶ", authAdminSetupKey: "ପ୍ରଶାସକ ସେଟଅପ୍ କି", authFeatureCrop: "ଫସଲ ମୂଲ୍ୟାଙ୍କନ", authFeatureWeather: "ସ୍ଥାନୀୟ ପାଣିପାଗ", authFeatureRecords: "ଚାଷ ବିବରଣୀ", authGmailNotice: "Gmail ଖୋଲାଯାଇଛି। ଅନୁରୋଧ ଯାଞ୍ଚ କରି ପ୍ରଶାସକଙ୍କୁ ପଠାଇବାକୁ Send ଦବାନ୍ତୁ।",
+});

@@ -68,11 +68,23 @@ function App() {
   const [view, setView] = useState("home");
   const [history, setHistory] = useState([]);
   const [historySearch, setHistorySearch] = useState("");
+  const [adminData, setAdminData] = useState(null);
+  const [adminBusy, setAdminBusy] = useState(false);
+  const [adminMessage, setAdminMessage] = useState("");
+  const [adminSearch, setAdminSearch] = useState("");
+  const [adminStatusFilter, setAdminStatusFilter] = useState("all");
+  const [adminEventFilter, setAdminEventFilter] = useState("all");
+  const [adminTo, setAdminTo] = useState(() => new Date().toISOString().slice(0, 10));
+  const [adminFrom, setAdminFrom] = useState(() => new Date(Date.now() - 29 * 86400000).toISOString().slice(0, 10));
   const [language, setLanguage] = useState(() =>
     localStorage.getItem("km-language") === "or" ? "or" : "en",
   );
   const [authMode, setAuthMode] = useState("login");
+  const [adminSetupAvailable, setAdminSetupAvailable] = useState(false);
+  const [adminContactEmail, setAdminContactEmail] = useState("");
+  const [approvedReset, setApprovedReset] = useState(null);
   const [authError, setAuthError] = useState("");
+  const [authNotice, setAuthNotice] = useState("");
   const [formError, setFormError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
@@ -81,6 +93,7 @@ function App() {
   const [result, setResult] = useState(null);
   const [translationStatus, setTranslationStatus] = useState("");
   const resultRef = useRef(null);
+  const resetRequestsRef = useRef(null);
   const [gpsPlace, setGpsPlace] = useState(null);
   const [locationNote, setLocationNote] = useState("");
   const [locating, setLocating] = useState(false);
@@ -95,6 +108,13 @@ function App() {
   const [profileNotice, setProfileNotice] = useState("");
   const [currentTime, setCurrentTime] = useState(() => new Date());
   const t = translations[language];
+  const adminText = (english, odia) => language === "or" ? odia : english;
+  const adminEventLabel = (event) => language !== "or" ? event : event
+    .replace("login_success", "ସଫଳ ସାଇନ୍-ଇନ୍").replace("admin_login_success", "ପ୍ରଶାସକ ସାଇନ୍-ଇନ୍ ସଫଳ")
+    .replace("login_failed", "ସାଇନ୍-ଇନ୍ ବିଫଳ").replace("admin_login_failed", "ପ୍ରଶାସକ ସାଇନ୍-ଇନ୍ ବିଫଳ")
+    .replace("login_blocked", "ସାଇନ୍-ଇନ୍ ଅବରୋଧ").replace("logout", "ଲଗ୍ ଆଉଟ୍")
+    .replace("account_created", "ଖାତା ତିଆରି").replace("password_reset_requested", "ପାସୱାର୍ଡ ପୁନଃସେଟ୍ ଅନୁରୋଧ")
+    .replace("password_reset_resolved", "ପାସୱାର୍ଡ ପୁନଃସେଟ୍ ସମାଧାନ").replace("password_reset_rejected", "ପାସୱାର୍ଡ ପୁନଃସେଟ୍ ଅଗ୍ରାହ୍ୟ");
   const locale = language === "or" ? "or-IN" : "en-IN";
   const filteredHistory = history.filter((item) =>
     [
@@ -110,6 +130,29 @@ function App() {
       .toLocaleLowerCase(locale)
       .includes(historySearch.trim().toLocaleLowerCase(locale)),
   );
+  const filteredAdminFarmers = (adminData?.farmers || []).filter((farmer) => {
+    const query = adminSearch.trim().toLowerCase();
+    const matchesQuery = !query || `${farmer.name} ${farmer.email}`.toLowerCase().includes(query);
+    const matchesStatus = adminStatusFilter === "all" || (adminStatusFilter === "active" ? farmer.is_active : !farmer.is_active);
+    return matchesQuery && matchesStatus;
+  });
+  const filteredAdminEvents = (adminData?.events || []).filter((event) => {
+    const query = adminSearch.trim().toLowerCase();
+    const matchesQuery = !query || `${event.email} ${event.event}`.toLowerCase().includes(query);
+    return matchesQuery && (adminEventFilter === "all" || event.event.includes(adminEventFilter));
+  });
+  const adminOverviewUrl = () => `/api/admin/overview?from=${encodeURIComponent(adminFrom)}&to=${encodeURIComponent(adminTo)}`;
+  const refreshAdminOverview = async () => {
+    if (!adminData) setAdminBusy(true);
+    setAdminMessage("");
+    try {
+      setAdminData(await api(adminOverviewUrl()));
+    } catch (error) {
+      setAdminMessage(error.message);
+    } finally {
+      setAdminBusy(false);
+    }
+  };
   const exportHistory = () => {
     const csvCell = (value) => {
       let text = String(value ?? "").replaceAll('"', '""');
@@ -147,9 +190,11 @@ function App() {
   }, []);
   useEffect(() => {
     api("/api/status")
-      .then((status) =>
-        setCropAnalysisStatus(status.integrations?.cropAnalysis || null),
-      )
+      .then((status) => {
+        setCropAnalysisStatus(status.integrations?.cropAnalysis || null);
+        setAdminSetupAvailable(Boolean(status.adminSetupAvailable));
+        setAdminContactEmail(status.adminContactEmail || "");
+      })
       .catch(() => {});
   }, []);
   useEffect(() => {
@@ -169,6 +214,11 @@ function App() {
       api("/api/diagnoses")
         .then(setHistory)
         .catch(() => setHistory([]));
+  }, [user, view]);
+  useEffect(() => {
+    if (user?.role === "admin" && view === "admin") {
+      refreshAdminOverview();
+    }
   }, [user, view]);
   useEffect(() => {
     if (!result?.id || view !== "diagnose" || result.language === language) {
@@ -236,8 +286,25 @@ function App() {
     const body = Object.fromEntries(form.entries());
     body.language = language;
     try {
+      if (authMode === "forgot") {
+        if (!adminContactEmail) throw new Error("Administrator email is not configured. Set ADMIN_EMAIL in the backend .env and restart the server.");
+        const gmailTab = window.open("about:blank", "_blank");
+        await api("/api/auth/password-reset-request", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: body.email }) });
+        const subject = encodeURIComponent("Krushi Mitra password reset request");
+        const message = encodeURIComponent(`Hello Administrator,\n\nI cannot access my Krushi Mitra account and request a password reset.\n\nRegistered email: ${body.email}\n\nPlease verify my identity before issuing a temporary password.\n\nThank you.`);
+        const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(adminContactEmail)}&su=${subject}&body=${message}`;
+        if (gmailTab) gmailTab.location.href = gmailUrl;
+        else window.location.assign(gmailUrl);
+        setAuthNotice(t.authGmailNotice);
+        setBusy(false);
+        return;
+      }
       const nextUser = await api(
-        `/api/auth/${authMode === "login" ? "login" : "register"}`,
+        authMode === "admin-setup"
+          ? "/api/admin/setup"
+          : authMode === "admin-login"
+            ? "/api/admin/login"
+            : `/api/auth/${authMode === "login" ? "login" : "register"}`,
         {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -246,6 +313,7 @@ function App() {
       );
       setWeather(null);
       setWeatherError("");
+      if (authMode === "admin-setup") setAdminSetupAvailable(false);
       setUser(nextUser);
       setLanguage(nextUser.language || language);
       localStorage.setItem("km-language", nextUser.language || language);
@@ -267,6 +335,37 @@ function App() {
       setWeatherError("");
       setLocationNote("");
     }
+  };
+  const updateAdminAccount = async (farmerId, changes) => {
+    setAdminMessage("");
+    try {
+      await api(`/api/admin/farmers/${farmerId}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(changes),
+      });
+      setAdminData(await api(adminOverviewUrl()));
+      setAdminMessage(changes.active === undefined ? "Account role updated." : changes.active ? "Account enabled." : "Account disabled; its sessions were ended.");
+    } catch (error) { setAdminMessage(error.message); }
+  };
+  const revokeAdminSessions = async (farmerId) => {
+    setAdminMessage("");
+    try {
+      const result = await api(`/api/admin/farmers/${farmerId}/revoke-sessions`, { method: "POST" });
+      setAdminData(await api(adminOverviewUrl()));
+      setAdminMessage(`${result.revoked} session(s) ended.`);
+    } catch (error) { setAdminMessage(error.message); }
+  };
+  const exportAdminCsv = (rows, filename) => {
+    const cell = (value) => {
+      let text = String(value ?? "").replaceAll('"', '""');
+      if (/^[=+\-@]/.test(text)) text = `'${text}`;
+      return `"${text}"`;
+    };
+    const csv = `\uFEFF${rows.map((row) => row.map(cell).join(",")).join("\r\n")}`;
+    const href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    const link = document.createElement("a"); link.href = href; link.download = filename; link.click();
+    setTimeout(() => URL.revokeObjectURL(href), 1000);
   };
   const saveAssessmentPdf = (report) => {
     const previousTitle = document.title;
@@ -509,10 +608,23 @@ function App() {
               <em>{t.authTitleEm}</em>
             </h1>
             <p>{t.authIntro}</p>
+            <div className="auth-feature-list">
+              <div><span className="auth-feature-icon">⌕</span><b>{t.authFeatureCrop}</b></div>
+              <div><span className="auth-feature-icon">☼</span><b>{t.authFeatureWeather}</b></div>
+              <div><span className="auth-feature-icon">♧</span><b>{t.authFeatureRecords}</b></div>
+            </div>
             <span className="trust">✦ &nbsp; {t.trust}</span>
           </div>
           <form className="auth-card" onSubmit={login}>
+            <div className="auth-card-brand"><span>✳</span><div><b>KRUSHI MITRA</b><small>{t.authBrandCaption}</small></div></div>
             <div className="auth-tabs">
+              {authMode === "admin-login" ? (
+                <>
+                  <button type="button" className="selected">{t.authAdmin}</button>
+                  <button type="button" onClick={() => { setAuthMode("login"); setAuthError(""); }}>{t.authFarmer}</button>
+                </>
+              ) : (
+                <>
               <button
                 type="button"
                 className={authMode === "login" ? "selected" : ""}
@@ -533,12 +645,19 @@ function App() {
               >
                 {t.signup}
               </button>
+              {adminSetupAvailable && (
+                  <button type="button" className={authMode === "admin-setup" ? "selected" : ""} onClick={() => { setAuthMode("admin-setup"); setAuthError(""); }}>
+                  {t.authSetup}
+                </button>
+              )}
+                </>
+              )}
             </div>
-            <h2>{authMode === "login" ? t.welcome : t.join}</h2>
+            <h2>{authMode === "forgot" ? t.authForgotTitle : authMode === "admin-login" ? t.authAdmin : authMode === "login" ? t.welcome : authMode === "admin-setup" ? t.authCreateAdmin : t.join}</h2>
             <p className="muted">
-              {authMode === "login" ? t.loginHint : t.signupHint}
+              {authMode === "forgot" ? t.authForgotIntro : authMode === "admin-login" ? t.authAdminIntro : authMode === "login" ? t.loginHint : authMode === "admin-setup" ? t.authSetupIntro : t.signupHint}
             </p>
-            {authMode === "register" && (
+            {(authMode === "register" || authMode === "admin-setup") && (
               <label>
                 {t.name}
                 <input
@@ -559,7 +678,14 @@ function App() {
                 placeholder={t.emailPlaceholder}
               />
             </label>
-            <label>
+            {authMode === "forgot" && <p className="auth-forgot-contact">{t.authDraftTo} <b>{adminContactEmail || "Administrator email is not set"}</b></p>}
+            {authMode === "admin-setup" && (
+              <label>
+                {t.authAdminSetupKey}
+                <input type="password" name="setupKey" required autoComplete="off" />
+              </label>
+            )}
+            {authMode !== "forgot" && <label>
               {t.password}
               <input
                 type="password"
@@ -572,13 +698,16 @@ function App() {
                 }
                 placeholder={t.passwordPlaceholder}
               />
-            </label>
+            </label>}
             <button disabled={busy} className="button full">
-              {busy ? t.wait : authMode === "login" ? t.login : t.signup}{" "}
+              {busy ? t.wait : authMode === "forgot" ? t.authForgotButton : authMode === "admin-login" ? t.authAdmin : authMode === "login" ? t.login : authMode === "admin-setup" ? t.authCreateAdmin : t.signup}{" "}
               <span>→</span>
             </button>
             {authError && <p className="error">{authError}</p>}
+            {authNotice && <p role="status" className="auth-success">{authNotice}</p>}
             <p className="form-note">{t.privateNote}</p>
+            {authMode === "login" && <div className="auth-links"><button type="button" className="auth-admin-link" onClick={() => { setAuthMode("forgot"); setAuthError(""); setAuthNotice(""); }}><span>Forgot password?</span><b>Request help <span aria-hidden="true">→</span></b></button><button type="button" className="auth-admin-link" onClick={() => { setAuthMode("admin-login"); setAuthError(""); }}><span>Administrator</span><b>Admin sign in <span aria-hidden="true">↗</span></b></button></div>}
+            {authMode === "forgot" && <button type="button" className="auth-back-link" onClick={() => { setAuthMode("login"); setAuthError(""); setAuthNotice(""); }}>← {t.authBack}</button>}
           </form>
         </div>
       </main>
@@ -630,6 +759,11 @@ function App() {
           <span>♙</span>
           {t.profileNav}
         </button>
+        {user.role === "admin" && (
+          <button className={view === "admin" ? "nav-item active" : "nav-item"} onClick={() => go("admin")}>
+            <span>⚙</span>{t.adminNav}
+          </button>
+        )}
         <div className="sidebar-bottom">
           <div className="advisor-card">
             <span>✦</span>
@@ -1390,6 +1524,46 @@ function App() {
                 </button>
               </div>
             )}
+          </section>
+        )}
+        {view === "admin" && user.role === "admin" && (
+          <section className="page admin-page">
+            <div className="section-head"><div><p className="eyebrow">{language === "or" ? "ସିଷ୍ଟମ୍ ପରିଚାଳନା" : "SYSTEM MANAGEMENT"}</p><h2>{t.adminTitle}</h2><p className="muted">{t.adminIntro}</p></div><button className="button button-secondary" onClick={refreshAdminOverview}>{t.adminRefresh}</button></div>
+            {adminMessage && <p role="status" className="admin-notice">{adminMessage}</p>}
+            {adminBusy ? <p>{adminText("Loading administrator data…","ପ୍ରଶାସକ ସୂଚନା ଲୋଡ୍ ହେଉଛି…")}</p> : adminData && <>
+              <div className="admin-stats"><article><b>{adminData.farmers.length}</b><span>{adminText("Accounts","ଖାତା")}</span></article><article><b>{adminData.farmers.filter(f => f.is_active).length}</b><span>{adminText("Active accounts","ସକ୍ରିୟ ଖାତା")}</span></article><article><b>{adminData.activeSessions.length}</b><span>{adminText("Active sessions","ସକ୍ରିୟ ସେସନ୍")}</span></article><article><b>{adminData.farmers.reduce((sum, f) => sum + Number(f.assessment_count || 0), 0)}</b><span>{adminText("Saved assessments","ସଞ୍ଚିତ ମୂଲ୍ୟାଙ୍କନ")}</span></article></div>
+              <article className="admin-card admin-health-card">
+                <div className="admin-card-head"><div><h3>{t.adminHealth}</h3><p className="muted">{t.adminHealthNote}</p></div><span className="health-status"><i /> API {language === "or" ? "ସୁସ୍ଥ" : "healthy"}</span></div>
+                <div className="admin-health-grid">
+                  <div><span>{t.adminApplicationApi}</span><b>{language === "or" ? "ସୁସ୍ଥ" : (adminData.health?.api || "unknown")}</b></div>
+                  <div><span>{t.adminDatabase}</span><b>{language === "or" ? "ସଂଯୁକ୍ତ" : (adminData.health?.database || "unknown")}</b></div>
+                  <div><span>{t.adminCropAnalysis}</span><b>{language === "or" ? (adminData.health?.cropAnalysis?.includes("not configured") ? "ସେଟ୍ ହୋଇନାହିଁ" : "ସେଟ୍ ହୋଇଛି · ସଜୀବ ଯାଞ୍ଚ ହୋଇନାହିଁ") : (adminData.health?.cropAnalysis || "unknown")}</b></div>
+                  <div><span>{t.adminWeather}</span><b>{language === "or" ? "Open-Meteo ଉପଲବ୍ଧ · ପାଣିପାଗ ସେବା ସ୍ଥିତି ଯାଞ୍ଚ କରନ୍ତୁ" : (adminData.health?.weather || "unknown")}</b></div>
+                  <div><span>{t.adminImageStorage}</span><b>{language === "or" ? "ବ୍ୟକ୍ତିଗତ ସ୍ଥାନୀୟ ଫାଇଲ୍ ସଂରକ୍ଷଣ" : (adminData.health?.storage || "unknown")}</b></div>
+                  <div><span>{t.adminUptime}</span><b>{Math.floor((adminData.health?.uptimeSeconds || 0) / 3600)}h {Math.floor(((adminData.health?.uptimeSeconds || 0) % 3600) / 60)}m</b></div>
+                </div>
+              </article>
+              <article className="admin-card">
+                <div className="admin-card-head"><div><h3>{t.adminActivity}</h3><p className="muted">{t.adminActivityNote}</p></div><div className="admin-date-filter"><label>{t.adminFrom}<input type="date" value={adminFrom} max={adminTo} onChange={e => setAdminFrom(e.target.value)} /></label><label>{t.adminTo}<input type="date" value={adminTo} min={adminFrom} onChange={e => setAdminTo(e.target.value)} /></label><button className="button button-secondary" onClick={refreshAdminOverview} disabled={adminBusy}>{t.adminApplyDates}</button></div></div>
+                {(() => {
+                  const days = adminData.activity || [];
+                  const totals = days.reduce((sum, day) => ({ accounts: sum.accounts + Number(day.accounts), logins: sum.logins + Number(day.logins), assessments: sum.assessments + Number(day.assessments) }), { accounts: 0, logins: 0, assessments: 0 });
+                  const maxValue = Math.max(1, ...days.flatMap(day => [Number(day.accounts), Number(day.logins), Number(day.assessments)]));
+                  return <>
+                    <div className="activity-totals"><span><b>{totals.accounts}</b> {adminText("new accounts","ନୂତନ ଖାତା")}</span><span><b>{totals.logins}</b> {adminText("successful sign-ins","ସଫଳ ସାଇନ୍-ଇନ୍")}</span><span><b>{totals.assessments}</b> {adminText("assessments","ମୂଲ୍ୟାଙ୍କନ")}</span></div>
+                    <div className="activity-legend"><span><i className="activity-account" />{adminText("Accounts","ଖାତା")}</span><span><i className="activity-login" />{adminText("Sign-ins","ସାଇନ୍-ଇନ୍")}</span><span><i className="activity-assessment" />{adminText("Assessments","ମୂଲ୍ୟାଙ୍କନ")}</span></div>
+                    <div className="activity-chart-scroll"><div className="activity-chart" role="img" aria-label={`Daily activity from ${adminData.range.from} through ${adminData.range.to}`}>
+                      {days.map(day => <div className="activity-day" key={day.date} title={`${day.date}: ${day.accounts} accounts, ${day.logins} sign-ins, ${day.assessments} assessments`}><div className="activity-bars"><i className="activity-account" style={{ height: `${Math.max(day.accounts ? 4 : 0, Number(day.accounts) / maxValue * 100)}%` }} /><i className="activity-login" style={{ height: `${Math.max(day.logins ? 4 : 0, Number(day.logins) / maxValue * 100)}%` }} /><i className="activity-assessment" style={{ height: `${Math.max(day.assessments ? 4 : 0, Number(day.assessments) / maxValue * 100)}%` }} /></div><small>{new Date(`${day.date}T00:00:00`).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}</small></div>)}
+                    </div></div>
+                  </>;
+                })()}
+              </article>
+              <div className="admin-toolbar"><input type="search" value={adminSearch} onChange={e => setAdminSearch(e.target.value)} placeholder={t.adminSearch} aria-label={t.adminSearch}/><select aria-label={language === "or" ? "ଖାତା ସ୍ଥିତି ଛାଣନ୍ତୁ" : "Filter accounts by status"} value={adminStatusFilter} onChange={e => setAdminStatusFilter(e.target.value)}><option value="all">{language === "or" ? "ସମସ୍ତ ଖାତା" : "All account statuses"}</option><option value="active">{language === "or" ? "ସକ୍ରିୟ" : "Active only"}</option><option value="disabled">{language === "or" ? "ନିଷ୍କ୍ରିୟ" : "Disabled only"}</option></select></div>
+              <article className="admin-card"><h3>{t.adminResetRequests}</h3><p className="muted">{t.adminResetVerify}</p>{approvedReset && <div className="reset-password-panel"><div><b>{adminText(`Password for ${approvedReset.email}`, `${approvedReset.email} ପାଇଁ ପାସୱାର୍ଡ`)}</b><code>{approvedReset.password}</code></div><button className="button button-secondary" onClick={() => navigator.clipboard.writeText(approvedReset.password).then(() => setAdminMessage("Password copied." )).catch(() => setAdminMessage("Select and copy the password shown above."))}>{t.adminCopyPassword}</button><a className="button button-secondary" target="_blank" rel="noreferrer" href={`https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(approvedReset.email)}&su=${encodeURIComponent("Krushi Mitra password reset")}&body=${encodeURIComponent(`Hello,\n\nYour Krushi Mitra password has been reset. Use this temporary password to sign in:\n\n${approvedReset.password}\n\nPlease change it after signing in.\n`)}`}>{t.adminDraftReply}</a></div>}<div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>{adminText("Requested","ଅନୁରୋଧ")}</th><th>{t.email}</th><th>{adminText("Status","ସ୍ଥିତି")}</th><th>{adminText("Actions","କାର୍ଯ୍ୟ")}</th></tr></thead><tbody>{(adminData.passwordResetRequests || []).map(r => <tr key={r.id}><td>{new Date(`${r.created_at}Z`).toLocaleString()}</td><td>{r.email}</td><td><span className={`reset-status reset-${r.status}`}>{r.status === "pending" ? t.adminResetPending : r.status === "resolved" ? t.adminResetResolved : t.adminResetRejected}</span></td><td>{r.status === "pending" ? <div className="admin-controls"><button className="button button-secondary" onClick={async () => { setAdminMessage("Approving reset request…"); try { const result = await api(`/api/admin/password-reset-requests/${r.id}/resolve`, { method: "POST" }); setApprovedReset({ email: r.email, password: result.temporaryPassword }); await refreshAdminOverview(); try { await navigator.clipboard.writeText(result.temporaryPassword); } catch {} setAdminMessage("Approved. Review the generated password and use Draft Gmail reply to send it."); } catch (error) { setAdminMessage(`Could not approve request: ${error.message}`); } }}>{t.adminApproveReset}</button><button className="button button-danger" onClick={async () => { if (!window.confirm(`Reject the reset request from ${r.email}?`)) return; setAdminMessage("Rejecting reset request…"); try { await api(`/api/admin/password-reset-requests/${r.id}/reject`, { method: "POST" }); await refreshAdminOverview(); setAdminMessage("Reset request rejected. The farmer’s password was not changed."); } catch (error) { setAdminMessage(`Could not reject request: ${error.message}`); } }}>{t.adminReject}</button></div> : <span className="muted">{t.adminResetClosed}</span>}</td></tr>)}</tbody></table></div></article>
+              <article className="admin-card"><div className="admin-card-head"><h3>{t.adminAccounts}</h3><button className="button button-secondary" onClick={() => exportAdminCsv([["Name","Email","Role","Status","Created","Last login","Assessments","Active sessions"], ...filteredAdminFarmers.map(f => [f.name,f.email,f.role,f.is_active ? "Active" : "Disabled",f.created_at,f.last_login,f.assessment_count,f.active_sessions])], "krushi-mitra-admin-accounts.csv")}>{adminText("Export accounts CSV","ଖାତା CSV ରପ୍ତାନି")}</button></div><div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>{adminText("Farmer","ଚାଷୀ")}</th><th>{adminText("Role / status","ଭୂମିକା / ସ୍ଥିତି")}</th><th>{adminText("Created","ତିଆରି")}</th><th>{adminText("Last login","ଶେଷ ସାଇନ୍-ଇନ୍")}</th><th>{adminText("Assessments","ମୂଲ୍ୟାଙ୍କନ")}</th><th>{adminText("Sessions","ସେସନ୍")}</th><th>{adminText("Controls","ନିୟନ୍ତ୍ରଣ")}</th></tr></thead><tbody>{filteredAdminFarmers.map(f => <tr key={f.id}><td><b>{f.name}</b><small>{f.email}</small></td><td>{language === "or" ? (f.role === "admin" ? "ପ୍ରଶାସକ" : "ଚାଷୀ") : f.role} · {f.is_active ? adminText("Active","ସକ୍ରିୟ") : adminText("Disabled","ନିଷ୍କ୍ରିୟ")}</td><td>{new Date(`${f.created_at}Z`).toLocaleString()}</td><td>{f.last_login ? new Date(`${f.last_login}Z`).toLocaleString() : adminText("Never","କେବେ ନୁହେଁ")}</td><td>{f.assessment_count}</td><td>{f.active_sessions}</td><td><div className="admin-controls"><select aria-label={`Role for ${f.email}`} value={f.role} disabled={f.id === user.id} onChange={e => updateAdminAccount(f.id, { role: e.target.value })}><option value="farmer">Farmer</option><option value="admin">Admin</option></select><button className="button button-secondary" disabled={f.id === user.id} onClick={() => updateAdminAccount(f.id, { active: !f.is_active })}>{f.is_active ? "Disable" : "Enable"}</button><button className="button button-secondary" onClick={() => revokeAdminSessions(f.id)}>{adminText("End sessions","ସେସନ୍ ବନ୍ଦ କରନ୍ତୁ")}</button></div></td></tr>)}</tbody></table></div></article>
+              <article className="admin-card"><div className="admin-card-head"><h3>{t.adminAudit}</h3><div className="admin-controls"><select aria-label="Filter audit events" value={adminEventFilter} onChange={e => setAdminEventFilter(e.target.value)}><option value="all">{adminText("All events","ସମସ୍ତ ଘଟଣା")}</option><option value="login_success">{adminText("Successful logins","ସଫଳ ସାଇନ୍-ଇନ୍")}</option><option value="login_failed">{adminText("Failed logins","ବିଫଳ ସାଇନ୍-ଇନ୍")}</option><option value="logout">{adminText("Logouts","ଲଗ୍ ଆଉଟ୍")}</option><option value="role_changed">{adminText("Role changes","ଭୂମିକା ପରିବର୍ତ୍ତନ")}</option><option value="account_">{adminText("Account controls","ଖାତା ନିୟନ୍ତ୍ରଣ")}</option><option value="sessions_revoked">{adminText("Session revocations","ସେସନ୍ ବାତିଲ୍")}</option></select><button className="button button-secondary" onClick={() => exportAdminCsv([["Timestamp (UTC)","Email","Event","Account ID"], ...filteredAdminEvents.map(e => [e.created_at,e.email,e.event,e.farmer_id])], "krushi-mitra-auth-audit.csv")}>{adminText("Export audit CSV","ଅଡିଟ୍ CSV ରପ୍ତାନି")}</button></div></div><div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>{adminText("When (server time)","ସମୟ")}</th><th>{adminText("Account","ଖାତା")}</th><th>{adminText("Event","ଘଟଣା")}</th></tr></thead><tbody>{filteredAdminEvents.map(e => <tr key={e.id}><td>{new Date(`${e.created_at}Z`).toLocaleString()}</td><td>{e.email}</td><td>{adminEventLabel(e.event)}</td></tr>)}</tbody></table></div></article>
+              <article className="admin-card"><h3>{t.adminSessions}</h3><div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Farmer</th><th>Email</th><th>{adminText("Session expires","ସେସନ୍ ମିଆଦ")}</th></tr></thead><tbody>{adminData.activeSessions.map((s,i) => <tr key={`${s.farmer_id}-${i}`}><td>{s.name}</td><td>{s.email}</td><td>{new Date(s.expires_at).toLocaleString()}</td></tr>)}</tbody></table></div></article>
+            </>}
           </section>
         )}
         <footer className="app-footer">
