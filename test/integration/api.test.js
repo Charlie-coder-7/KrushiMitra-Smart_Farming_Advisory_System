@@ -111,3 +111,29 @@ test('photo crop report sends the image to Gemini and saves its analysis', async
   }
 });
 
+test('admin overview returns date-bounded activity and configuration-only health', async () => {
+  testEnv.ADMIN_SETUP_KEY = 'integration-admin-setup-key-2026';
+  try {
+    const admin = await request('/api/admin/setup', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Admin', email: 'overview-admin@example.com', password: 'secure-admin-pass-1', setupKey: testEnv.ADMIN_SETUP_KEY }) });
+    assert.equal(admin.response.status, 201, JSON.stringify(admin.data));
+    const farmer = await register('overview-farmer@example.com');
+    const activityDay = '2026-01-03 10:00:00';
+    db.prepare("UPDATE farmers SET created_at=? WHERE id=?").run(activityDay, farmer.data.id);
+    db.prepare("INSERT INTO auth_events(farmer_id,email,event,created_at) VALUES(?,?,?,?)").run(farmer.data.id, farmer.data.email, 'login_success', activityDay);
+    db.prepare("INSERT INTO diagnoses(farmer_id,crop,image_key,probable_issue,provider,created_at) VALUES(?,?,?,?,?,?)").run(farmer.data.id, 'Rice', 'test-image.png', 'Test issue', 'Test provider', activityDay);
+
+    const overview = await request('/api/admin/overview?from=2026-01-03&to=2026-01-03', {}, admin.cookie);
+    assert.equal(overview.response.status, 200, JSON.stringify(overview.data));
+    assert.deepEqual(overview.data.activity, [{ date: '2026-01-03', accounts: 1, logins: 1, assessments: 1 }]);
+    assert.deepEqual(overview.data.range, { from: '2026-01-03', to: '2026-01-03' });
+    assert.equal(overview.data.health.api, 'healthy');
+    assert.equal(overview.data.health.database, 'connected');
+    assert.match(overview.data.health.cropAnalysis, /not configured/);
+    assert.match(overview.data.health.cropAnalysis, /not live-tested/);
+    assert.equal((await request('/api/admin/overview?from=2026-02-30&to=2026-03-01', {}, admin.cookie)).response.status, 400);
+    assert.equal((await request('/api/admin/overview?from=2025-01-01&to=2026-01-02', {}, admin.cookie)).response.status, 400);
+  } finally {
+    delete testEnv.ADMIN_SETUP_KEY;
+  }
+});
+

@@ -9,6 +9,7 @@ services:
       DATA_DIR: /app/data
       UPLOAD_DIR: /app/data/uploads
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      ADMIN_SETUP_KEY: ${ADMIN_SETUP_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.8-flash}
       WEATHER_API_KEY: ${WEATHER_API_KEY:-}

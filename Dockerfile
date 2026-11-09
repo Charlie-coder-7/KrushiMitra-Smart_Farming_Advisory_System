@@ -11,6 +11,7 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev && mkdir -p /app/data /app/data/uploads && chown -R node:node /app
 COPY --from=build --chown=node:node /app/src ./src
+COPY --from=build --chown=node:node /app/scripts ./scripts
 COPY --from=build --chown=node:node /app/dist ./dist
 USER node
 EXPOSE 8080

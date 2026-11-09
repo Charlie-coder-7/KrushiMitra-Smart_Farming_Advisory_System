@@ -87,6 +87,11 @@ Add credentials to the deployment environment and do not commit them to source c
 | `GEMINI_API_KEY` | Optional server-side key for image-based crop analysis |
 | `GEMINI_MODEL` | Optional vision-capable Gemini model name |
 | `COOKIE_SECURE` | Set to `true` when serving the app over HTTPS |
+| `ADMIN_SETUP_KEY` | One-time secret required to create the first administrator |
+
+### Create the first administrator
+
+Set a private setup key in `.env` before starting the app. Generate one with `openssl rand -hex 24`, then put the result on the `ADMIN_SETUP_KEY=` line. Restart the app and choose **Set up admin** on the sign-in screen. Enter your name, admin email, password, and setup key. The form is available only until the first admin is created; afterward, use **Administrator sign in**. Admin passwords are stored as salted hashes in SQLite. Do not commit or share the setup key.
 
 Browser GPS works on `localhost` or an HTTPS website and requires the farmer's permission. If no location or weather provider is available, the app reports that weather could not be retrieved.
 
